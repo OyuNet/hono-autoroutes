@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "lib": ["ES2022"],
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "moduleDetection": "force",
+    "verbatimModuleSyntax": true,
+    "noUncheckedIndexedAccess": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "allowJs": false,
+    "noEmit": true
+  },
+  "include": ["src", "scripts"]
+}

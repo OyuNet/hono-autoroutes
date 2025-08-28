@@ -1,0 +1,52 @@
+{
+  "name": "hono-autoroutes",
+  "version": "0.1.0",
+  "description": "Zero-magic file-based routing loader for Hono (mount routes/**/route.ts).",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "clean": "rimraf dist",
+    "prepublishOnly": "npm run clean && npm run build",
+    "smoke": "node ./scripts/smoke.mjs"
+  },
+  "keywords": ["hono", "router", "routes", "file-based", "autoroutes"],
+  "author": "Arda Yiğit Tok",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OyuNet/hono-autoroutes.git"
+  },
+  "bugs": {
+    "url": "https://github.com/OyuNet/hono-autoroutes/issues"
+  },
+  "homepage": "https://github.com/OyuNet/hono-autoroutes#readme",
+  "peerDependencies": {
+    "hono": ">=4"
+  },
+  "peerDependenciesMeta": {
+    "hono": { "optional": false }
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "hono": "^4.6.0",
+    "rimraf": "^6.0.0",
+    "typescript": "^5.4.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
