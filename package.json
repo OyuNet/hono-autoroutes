@@ -1,6 +1,6 @@
 {
   "name": "hono-autoroutes",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Zero-magic file-based routing loader for Hono (mount routes/**/route.ts).",
   "type": "module",
   "main": "./dist/index.js",
