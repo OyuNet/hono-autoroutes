@@ -60,6 +60,10 @@ await mountAutoRoutes(app, {
 export default app
 ```
 
+> Bun and TypeScript-aware development runtimes can import `route.ts` directly. Plain Node.js
+> can only import JavaScript route files (`.js`, `.mjs`, or `.cjs`) unless you run it with a
+> TypeScript loader or compile the route files first.
+
 ### `src/routes/route.ts`
 
 ```ts
@@ -190,9 +194,11 @@ type AutoroutesOptions = {
   fileName?: string // deprecated
   middlewareFileNames?: string[] | RegExp
   middlewareFileName?: string // deprecated
-  entries?: Record<string, any | (() => Promise<any>)>
+  entries?: AutoroutesEntries
   virtualRoot?: string | RegExp
   logger?: { log?: (msg: string) => void; warn?: (msg: string) => void }
+  silent?: boolean
+  strict?: boolean
   duplicateStrategy?: 'first' | 'last'
 }
 ```
@@ -202,8 +208,29 @@ type AutoroutesOptions = {
 * **entries** → Bundler-provided modules (Edge mode).
 * **virtualRoot** → Root prefix to strip when deriving mount paths.
 * **logger** → Custom logging implementation.
+* **silent** → Disable all autoroutes logging.
+* **strict** → Throw when a discovered module cannot be loaded or registered; by default failures are logged and discovery continues.
 * **duplicateStrategy** → If multiple files map to the same path, keep the `first` (default) or the `last` (applies to routes and middleware).
 * **middlewareFileNames** → Allowed middleware filenames (default: `middleware.ts/js/mjs/cjs`).
+
+Both mounting functions return discovery statistics:
+
+```ts
+const stats = await mountAutoRoutes(app, { silent: true })
+
+console.log(stats.routes.mounted)
+console.log(stats.middlewares.failed)
+```
+
+Public entry-module types are available for bundler integrations:
+
+```ts
+import type { AutorouteModule, AutoroutesEntries } from 'hono-autoroutes'
+
+const entries: AutoroutesEntries<AutorouteModule> = import.meta.glob<AutorouteModule>(
+  '/src/routes/**/{route,middleware}.ts',
+)
+```
 
 ---
 
@@ -226,8 +253,9 @@ You can map routes to a path without affecting the URL by wrapping the folder na
 
 ## 📝 Notes
 
-* Node/Bun: uses `fs` to walk the routes folder.
+* Node/Bun: uses `fs` to walk the routes folder. Plain Node needs JavaScript output or a TypeScript loader for `.ts` route files.
 * Edge/Workers: must use `entries` (e.g. `import.meta.glob`).
+* Supplying `entries: {}` explicitly selects entries mode and mounts nothing; it never falls back to Node filesystem APIs.
 * Duplicate mount paths are warned; strategy can be controlled.
 * **No extra conventions:** you still define routes with Hono APIs (`app.get`, `app.post`, etc.).
 * Middleware modules can export:

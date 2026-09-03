@@ -3,6 +3,23 @@ import { Hono } from 'hono'
 import { mountAutoRoutesFromEntries } from '../src/index'
 
 describe('Entries Mode', () => {
+  test('treats an empty entries map as entries mode', async () => {
+    const app = new Hono()
+    const logs: string[] = []
+
+    const stats = await mountAutoRoutesFromEntries(
+      app,
+      {},
+      { logger: { log: (msg) => logs.push(msg) } },
+    )
+
+    expect(stats).toEqual({
+      routes: { mounted: 0, skipped: 0, failed: 0 },
+      middlewares: { mounted: 0, skipped: 0, failed: 0 },
+    })
+    expect(logs.at(-1)).toContain('routes: mounted 0')
+  })
+
   test('basic routing', async () => {
     const app = new Hono()
     const entries = {
@@ -231,5 +248,104 @@ describe('Entries Mode', () => {
 
     const res2 = await app.request('http://localhost/ignored')
     expect(res2.status).toBe(404)
+  })
+
+  test('matches every file with a global regular expression', async () => {
+    const app = new Hono()
+    const entries = {
+      '/src/routes/one/route.ts': { default: new Hono().get('/', (c) => c.text('one')) },
+      '/src/routes/two/route.ts': { default: new Hono().get('/', (c) => c.text('two')) },
+    }
+
+    const stats = await mountAutoRoutesFromEntries(app, entries, {
+      virtualRoot: '/src/routes',
+      fileNames: /^route\.ts$/g,
+      silent: true,
+    })
+
+    expect((await app.request('http://localhost/one')).status).toBe(200)
+    expect((await app.request('http://localhost/two')).status).toBe(200)
+    expect(stats.routes.mounted).toBe(2)
+  })
+
+  test.each([
+    [String.raw`\src\routes\windows\route.ts`, '/src/routes'],
+    ['./src/routes/dot/route.ts', '/src/routes'],
+  ])('loads modules whose source key is normalized: %s', async (sourceKey, virtualRoot) => {
+    const app = new Hono()
+    const entries = {
+      [sourceKey]: { default: new Hono().get('/', (c) => c.text('normalized')) },
+    }
+
+    const stats = await mountAutoRoutesFromEntries(app, entries, { virtualRoot, silent: true })
+    const route = sourceKey.includes('windows') ? '/windows' : '/dot'
+
+    expect(await (await app.request(`http://localhost${route}`)).text()).toBe('normalized')
+    expect(stats.routes.mounted).toBe(1)
+  })
+
+  test('silent mode suppresses logs and returns load statistics', async () => {
+    const app = new Hono()
+    const messages: string[] = []
+    const stats = await mountAutoRoutesFromEntries(
+      app,
+      {
+        '/src/routes/route.ts': { default: new Hono().get('/', (c) => c.text('ok')) },
+      },
+      {
+        virtualRoot: '/src/routes',
+        silent: true,
+        logger: {
+          log: (message) => messages.push(message),
+          warn: (message) => messages.push(message),
+        },
+      },
+    )
+
+    expect(messages).toEqual([])
+    expect(stats.routes).toEqual({ mounted: 1, skipped: 0, failed: 0 })
+  })
+
+  test('continues after loader failures by default and reports them', async () => {
+    const app = new Hono()
+    const stats = await mountAutoRoutesFromEntries(
+      app,
+      {
+        '/src/routes/broken/route.ts': async () => {
+          throw new Error('loader failed')
+        },
+      },
+      { virtualRoot: '/src/routes', silent: true },
+    )
+
+    expect(stats.routes.failed).toBe(1)
+  })
+
+  test('strict mode throws loader failures', async () => {
+    const app = new Hono()
+    const mounting = mountAutoRoutesFromEntries(
+      app,
+      {
+        '/src/routes/broken/route.ts': async () => {
+          throw new Error('loader failed')
+        },
+      },
+      { virtualRoot: '/src/routes', silent: true, strict: true },
+    )
+
+    await expect(mounting).rejects.toThrow('loader failed')
+  })
+
+  test('strict mode rejects invalid route module contracts', async () => {
+    const app = new Hono()
+    const mounting = mountAutoRoutesFromEntries(
+      app,
+      {
+        '/src/routes/invalid/route.ts': { notARoute: true },
+      },
+      { virtualRoot: '/src/routes', silent: true, strict: true },
+    )
+
+    await expect(mounting).rejects.toThrow('export a default Hono app')
   })
 })

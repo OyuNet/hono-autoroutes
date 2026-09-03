@@ -1,6 +1,6 @@
 {
   "name": "hono-autoroutes",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Zero-magic file-based routing loader for Hono (mount routes/**/route.ts).",
   "type": "module",
   "main": "./dist/index.js",
@@ -21,12 +21,13 @@
   "sideEffects": false,
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "clean": "rimraf dist",
-    "check": "npm run lint && npm test && npm run build && npm run smoke",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "check": "npm run lint && npm run typecheck:public && npm test && npm run build && npm run smoke",
     "prepublishOnly": "npm run clean && npm run check",
     "test": "bun test",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
+    "typecheck:public": "tsc -p tsconfig.type-tests.json",
     "smoke": "node ./scripts/smoke.mjs"
   },
   "keywords": [
@@ -58,7 +59,6 @@
     "@biomejs/biome": "^2.5.12",
     "@types/node": "^22.20.1",
     "hono": "^4.13.5",
-    "rimraf": "^6.1.3",
     "typescript": "^5.9.3"
   },
   "engines": {

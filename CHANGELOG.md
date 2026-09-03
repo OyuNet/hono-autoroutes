@@ -2,6 +2,28 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.5.0 - Unreleased
+
+### Added
+
+- Public types for entries, route modules, middleware modules, and registration functions.
+- Load statistics returned from `mountAutoRoutes` and `mountAutoRoutesFromEntries`.
+- `silent` mode for applications that do not want discovery logs.
+- `strict` mode to fail application startup when discovered modules cannot be loaded or registered.
+- Node 18, 20, and 22 smoke-test coverage plus Windows CI coverage.
+- Tokenless npm trusted-publishing workflow with automatic provenance.
+
+### Fixed
+
+- Empty `entries` maps no longer fall back to Node filesystem discovery.
+- Global and sticky filename regular expressions match consistently across multiple files.
+- Windows-style and dot-prefixed entries keys retain their original map lookup keys after normalization.
+
+### Changed
+
+- Plain Node TypeScript-loading requirements are now documented explicitly.
+- The Node 18-incompatible Rimraf development dependency was replaced with a built-in Node cleanup command.
+
 ## 0.4.0 - 2026-09-03
 
 ### Added

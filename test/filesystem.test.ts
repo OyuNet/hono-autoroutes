@@ -39,6 +39,20 @@ describe('Filesystem Mode', () => {
     expect(await res.text()).toBe('users-index')
   })
 
+  test('does not fall back to filesystem discovery when entries is empty', async () => {
+    await fs.mkdir(path.join(routesDir, 'filesystem-only'), { recursive: true })
+    await fs.writeFile(
+      path.join(routesDir, 'filesystem-only', 'route.mjs'),
+      `export function register(app) { app.get('/', (c) => c.text('unexpected')) }`,
+    )
+
+    const app = new Hono()
+    const stats = await mountAutoRoutes(app, { rootDir: routesDir, entries: {}, silent: true })
+
+    expect((await app.request('http://localhost/filesystem-only')).status).toBe(404)
+    expect(stats.routes.mounted).toBe(0)
+  })
+
   test('supports route groups in filesystem', async () => {
     await fs.mkdir(path.join(routesDir, '(admin)', 'settings'), { recursive: true })
 

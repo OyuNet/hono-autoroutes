@@ -1,5 +1,33 @@
 import type { Hono, MiddlewareHandler } from 'hono'
 
+export type MaybePromise<T> = T | Promise<T>
+export type RouteRegistrar = (app: Hono) => MaybePromise<void>
+export type MiddlewareRegistrationApp = { use: (...args: any[]) => unknown }
+export type MiddlewareRegistrar = (app: MiddlewareRegistrationApp) => MaybePromise<void>
+
+export type RouteModule = {
+  default?: Hono
+  createRoutes?: RouteRegistrar
+  register?: RouteRegistrar
+}
+
+export type MiddlewareModule = {
+  default?: MiddlewareHandler | MiddlewareHandler[]
+  middleware?: MiddlewareHandler
+  middlewares?: MiddlewareHandler[]
+  createMiddleware?: MiddlewareRegistrar
+  register?: MiddlewareRegistrar
+}
+
+export type AutorouteModule = RouteModule | MiddlewareModule
+export type EntryLoader<TModule = AutorouteModule> = TModule | (() => Promise<TModule>)
+export type AutoroutesEntries<TModule = unknown> = Record<string, EntryLoader<TModule>>
+
+export type LoadStats = {
+  routes: { mounted: number; skipped: number; failed: number }
+  middlewares: { mounted: number; skipped: number; failed: number }
+}
+
 export type AutoroutesOptions = {
   /** Absolute or relative directory containing your routes tree (Node runtime scan).
    * Defaults to first existing of: `src/routes`, `routes` (from process.cwd).
@@ -18,13 +46,17 @@ export type AutoroutesOptions = {
   middlewareFileName?: string
   // Provide a bundler-produced entries map (e.g. import.meta.glob for your routes tree).
   // Use this for edge/serverless. Keys should be POSIX-like paths.
-  entries?: Record<string, any | (() => Promise<any>)>
+  entries?: AutoroutesEntries
   /** For entries mode, the virtual root segment used to derive mount paths.
    * If omitted, we try to detect the first `.../routes/` occurrence.
    */
   virtualRoot?: string | RegExp
   /** Optional logger. Defaults to console.log/console.warn. */
   logger?: { log?: (msg: string) => void; warn?: (msg: string) => void }
+  /** Disable all autoroutes log output. Default: false. */
+  silent?: boolean
+  /** Throw when a discovered route or middleware module cannot be loaded or registered. Default: false. */
+  strict?: boolean
   /** When multiple files resolve to the same mount path, choose which one to keep. Default: 'first'. */
   duplicateStrategy?: 'first' | 'last'
 }
@@ -44,7 +76,7 @@ export type AutoroutesOptions = {
 export async function mountAutoRoutes(
   baseApp: Hono,
   options: AutoroutesOptions = {},
-): Promise<void> {
+): Promise<LoadStats> {
   const {
     rootDir,
     fileName,
@@ -54,10 +86,13 @@ export async function mountAutoRoutes(
     entries,
     virtualRoot,
     logger,
+    silent = false,
+    strict = false,
     duplicateStrategy = 'first',
   } = options
-  const log = logger?.log ?? ((msg: string) => console.log(msg))
-  const warn = logger?.warn ?? ((msg: string) => console.warn(msg))
+  const noop = () => {}
+  const log = silent ? noop : (logger?.log ?? ((msg: string) => console.log(msg)))
+  const warn = silent ? noop : (logger?.warn ?? ((msg: string) => console.warn(msg)))
 
   // Compute allowed filenames
   const defaultNames = ['route.ts', 'route.js', 'route.mjs', 'route.cjs']
@@ -77,7 +112,7 @@ export async function mountAutoRoutes(
   }
 
   // Edge/serverless friendly mode: user provides entries (e.g. import.meta.glob)
-  if (entries && Object.keys(entries).length > 0) {
+  if (entries !== undefined) {
     await mountFromEntries(baseApp, entries, {
       allowed,
       allowedMw: allowedMw,
@@ -85,10 +120,11 @@ export async function mountAutoRoutes(
       log,
       warn,
       duplicateStrategy,
+      strict,
       stats,
     })
     logSummary(log, stats)
-    return
+    return stats
   }
 
   // Node/runtime scan mode: lazy-import fs/path/url
@@ -99,9 +135,11 @@ export async function mountAutoRoutes(
     log,
     warn,
     duplicateStrategy,
+    strict,
     stats,
   })
   logSummary(log, stats)
+  return stats
 }
 
 export type { Hono } from 'hono'
@@ -120,7 +158,12 @@ export async function createAppWithAutoRoutes(
 // ---------- internals ----------
 
 function matchesAllowed(fileName: string, allowed: string[] | RegExp): boolean {
-  if (allowed instanceof RegExp) return allowed.test(fileName)
+  if (allowed instanceof RegExp) {
+    allowed.lastIndex = 0
+    const matches = allowed.test(fileName)
+    allowed.lastIndex = 0
+    return matches
+  }
   return allowed.includes(fileName)
 }
 
@@ -151,10 +194,11 @@ async function mountFromFilesystem(
     log: (msg: string) => void
     warn: (msg: string) => void
     duplicateStrategy: 'first' | 'last'
+    strict: boolean
     stats: LoadStats
   },
 ): Promise<void> {
-  const { rootDir, allowed, allowedMw, log, warn, duplicateStrategy, stats } = opts
+  const { rootDir, allowed, allowedMw, log, warn, duplicateStrategy, strict, stats } = opts
   const { promises: fs } = await import('node:fs')
   const path = await import('node:path')
   const { pathToFileURL } = await import('node:url')
@@ -264,7 +308,7 @@ async function mountFromFilesystem(
         selectedMw.push(arr[arr.length - 1]!)
       }
     }
-    await applyMiddlewaresFilesystem(baseApp, selectedMw, { log, warn, stats })
+    await applyMiddlewaresFilesystem(baseApp, selectedMw, { log, warn, strict, stats })
   }
 
   // Then mount routes
@@ -304,9 +348,9 @@ async function mountFromFilesystem(
       const mod = await import(pathToFileURL(f.file).href)
       const subApp = await resolveSubApp(mod)
       if (!subApp) {
-        warn(
-          `[hono-autoroutes] Skipping ${f.rel} — export a default Hono app or a register/createRoutes(app) function.`,
-        )
+        const message = `[hono-autoroutes] Skipping ${f.rel} — export a default Hono app or a register/createRoutes(app) function.`
+        if (strict) throw new TypeError(message)
+        warn(message)
         stats.routes.skipped++
         continue
       }
@@ -316,13 +360,14 @@ async function mountFromFilesystem(
     } catch (err: any) {
       warn(`[hono-autoroutes] Failed to import ${f.rel}: ${err?.message ?? String(err)}`)
       stats.routes.failed++
+      if (strict) throw err
     }
   }
 }
 
 async function mountFromEntries(
   baseApp: Hono,
-  entries: Record<string, any | (() => Promise<any>)>,
+  entries: AutoroutesEntries,
   opts: {
     allowed: string[] | RegExp
     allowedMw: string[] | RegExp
@@ -330,10 +375,11 @@ async function mountFromEntries(
     log: (msg: string) => void
     warn: (msg: string) => void
     duplicateStrategy: 'first' | 'last'
+    strict: boolean
     stats: LoadStats
   },
 ): Promise<void> {
-  const { allowed, allowedMw, virtualRoot, log, warn, duplicateStrategy, stats } = opts
+  const { allowed, allowedMw, virtualRoot, log, warn, duplicateStrategy, strict, stats } = opts
 
   function normalizeKey(p: string): string {
     // normalize to posix-like path
@@ -355,8 +401,8 @@ async function mountFromEntries(
     return { start: idx, len: idx >= 0 ? '/routes/'.length : 0 }
   }
 
-  const found: Array<{ key: string; mountPath: string }> = []
-  const foundMw: Array<{ key: string; mountPath: string }> = []
+  const found: Array<{ key: string; sourceKey: string; mountPath: string }> = []
+  const foundMw: Array<{ key: string; sourceKey: string; mountPath: string }> = []
 
   for (const keyRaw of Object.keys(entries)) {
     const key = normalizeKey(keyRaw)
@@ -387,7 +433,11 @@ async function mountFromEntries(
       .replace(/\/*$/, '')
 
     const mountPath = `/${relDir}`
-    const rec = { key, mountPath: mountPath === '/' ? '/' : mountPath.replace(/\/+$/, '') }
+    const rec = {
+      key,
+      sourceKey: keyRaw,
+      mountPath: mountPath === '/' ? '/' : mountPath.replace(/\/+$/, ''),
+    }
     if (matchesAllowed(fileName, allowed)) found.push(rec)
     else foundMw.push(rec)
   }
@@ -420,7 +470,7 @@ async function mountFromEntries(
         selectedMw.push(arr[arr.length - 1]!)
       }
     }
-    await applyMiddlewaresEntries(baseApp, selectedMw, entries, { log, warn, stats })
+    await applyMiddlewaresEntries(baseApp, selectedMw, entries, { log, warn, strict, stats })
   }
 
   // Then routes
@@ -456,13 +506,13 @@ async function mountFromEntries(
 
   for (const f of selected) {
     try {
-      const loaderOrMod = entries[f.key]
+      const loaderOrMod = entries[f.sourceKey]
       const mod = typeof loaderOrMod === 'function' ? await loaderOrMod() : loaderOrMod
       const subApp = await resolveSubApp(mod)
       if (!subApp) {
-        warn(
-          `[hono-autoroutes] Skipping ${f.key} — export a default Hono app or a register/createRoutes(app) function.`,
-        )
+        const message = `[hono-autoroutes] Skipping ${f.key} — export a default Hono app or a register/createRoutes(app) function.`
+        if (strict) throw new TypeError(message)
+        warn(message)
         stats.routes.skipped++
         continue
       }
@@ -472,6 +522,7 @@ async function mountFromEntries(
     } catch (err: any) {
       warn(`[hono-autoroutes] Failed to import ${f.key}: ${err?.message ?? String(err)}`)
       stats.routes.failed++
+      if (strict) throw err
     }
   }
 }
@@ -532,18 +583,18 @@ function createScopedUse(baseApp: Hono, mountPath: string) {
 async function applyMiddlewaresFilesystem(
   baseApp: Hono,
   foundMw: Array<{ file: string; mountPath: string; rel: string }>,
-  io: { log: (m: string) => void; warn: (m: string) => void; stats: LoadStats },
+  io: { log: (m: string) => void; warn: (m: string) => void; strict: boolean; stats: LoadStats },
 ): Promise<void> {
-  const { log, warn, stats } = io
+  const { log, warn, strict, stats } = io
   const { pathToFileURL } = await import('node:url')
   for (const f of foundMw) {
     try {
       const mod = await import(pathToFileURL(f.file).href)
       const handlers = await resolveMiddlewareHandlers(mod)
       if (handlers === null) {
-        warn(
-          `[hono-autoroutes] Skipping ${f.rel} — export default middleware, middlewares[], middleware, or register(app).`,
-        )
+        const message = `[hono-autoroutes] Skipping ${f.rel} — export default middleware, middlewares[], middleware, or register(app).`
+        if (strict) throw new TypeError(message)
+        warn(message)
         stats.middlewares.skipped++
         continue
       }
@@ -565,26 +616,27 @@ async function applyMiddlewaresFilesystem(
     } catch (err: any) {
       warn(`[hono-autoroutes] Failed to import middleware ${f.rel}: ${err?.message ?? String(err)}`)
       stats.middlewares.failed++
+      if (strict) throw err
     }
   }
 }
 
 async function applyMiddlewaresEntries(
   baseApp: Hono,
-  foundMw: Array<{ key: string; mountPath: string }>,
-  entries: Record<string, any | (() => Promise<any>)>,
-  io: { log: (m: string) => void; warn: (m: string) => void; stats: LoadStats },
+  foundMw: Array<{ key: string; sourceKey: string; mountPath: string }>,
+  entries: AutoroutesEntries,
+  io: { log: (m: string) => void; warn: (m: string) => void; strict: boolean; stats: LoadStats },
 ): Promise<void> {
-  const { log, warn, stats } = io
+  const { log, warn, strict, stats } = io
   for (const f of foundMw) {
     try {
-      const loaderOrMod = entries[f.key]
+      const loaderOrMod = entries[f.sourceKey]
       const mod = typeof loaderOrMod === 'function' ? await loaderOrMod() : loaderOrMod
       const handlers = await resolveMiddlewareHandlers(mod)
       if (handlers === null) {
-        warn(
-          `[hono-autoroutes] Skipping ${f.key} — export default middleware, middlewares[], middleware, or register(app).`,
-        )
+        const message = `[hono-autoroutes] Skipping ${f.key} — export default middleware, middlewares[], middleware, or register(app).`
+        if (strict) throw new TypeError(message)
+        warn(message)
         stats.middlewares.skipped++
         continue
       }
@@ -596,7 +648,13 @@ async function applyMiddlewaresEntries(
         stats.middlewares.mounted++
       } else {
         const adapter = createScopedUse(baseApp, f.mountPath)
-        const fn = (mod.register ?? mod.createMiddleware) as (a: any) => any
+        const fn =
+          mod && 'register' in mod && typeof mod.register === 'function'
+            ? (mod.register as MiddlewareRegistrar)
+            : mod && 'createMiddleware' in mod && typeof mod.createMiddleware === 'function'
+              ? mod.createMiddleware
+              : null
+        if (!fn) throw new TypeError(`No middleware registrar found in ${f.key}`)
         await Promise.resolve(fn(adapter))
         const [exact, wildcard] = mountPatterns(f.mountPath)
         log(`[hono-autoroutes] Applied scoped middleware from ${f.key} at ${exact}, ${wildcard}`)
@@ -605,15 +663,9 @@ async function applyMiddlewaresEntries(
     } catch (err: any) {
       warn(`[hono-autoroutes] Failed to import middleware ${f.key}: ${err?.message ?? String(err)}`)
       stats.middlewares.failed++
+      if (strict) throw err
     }
   }
-}
-
-// ---------- stats ----------
-
-type LoadStats = {
-  routes: { mounted: number; skipped: number; failed: number }
-  middlewares: { mounted: number; skipped: number; failed: number }
 }
 
 function logSummary(log: (m: string) => void, stats: LoadStats) {
@@ -649,8 +701,8 @@ async function resolveSubApp(mod: any): Promise<Hono | null> {
 /** Mount using glob-like entries (edge-ready). Alias helper. */
 export async function mountAutoRoutesFromEntries(
   baseApp: Hono,
-  entries: Record<string, any | (() => Promise<any>)>,
+  entries: AutoroutesEntries,
   options: Omit<AutoroutesOptions, 'entries'> = {},
-): Promise<void> {
+): Promise<LoadStats> {
   return mountAutoRoutes(baseApp, { ...options, entries })
 }
