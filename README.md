@@ -15,6 +15,7 @@ Most existing file-based routers for Hono introduce *new conventions* (like `GET
 * 🔌 **Flexible contract** – export a `Hono` instance or a `register(app)`/`createRoutes(app)` function.
 * 🌐 **Works everywhere** – Node/Bun (filesystem scan) **and** Edge/Workers (via `import.meta.glob`).
 * 🧩 **Scoped middleware** – optional `middleware.ts` at any folder applies to that path and all children.
+* 📦 **Route Groups** – organize files with `(folder)` syntax without affecting the URL.
 
 ---
 
@@ -214,6 +215,13 @@ type AutoroutesOptions = {
 * `routes/middleware.ts` → applies to all routes (i.e. `/*`)
 * `routes/admin/middleware.ts` → applies to `/admin/*`
 
+### Route Groups
+
+You can map routes to a path without affecting the URL by wrapping the folder name in parenthesis:
+
+* `routes/(app)/dashboard/route.ts` → `/dashboard`
+* `routes/(api)/v1/users/route.ts` → `/v1/users`
+
 ---
 
 ## 📝 Notes
@@ -227,6 +235,14 @@ type AutoroutesOptions = {
   - named: `middleware` or `middlewares`
   - or `register(app)`/`createMiddleware(app)`, where `app.use()` calls are scoped to that folder
 * Middleware covers the exact folder path (e.g. `/users`) and the subtree (e.g. `/users/*`).
+
+## 🧪 Testing
+
+Run built-in tests with:
+
+```bash
+bun test
+```
 
 ---
 

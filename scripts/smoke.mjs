@@ -1,82 +1,53 @@
+import assert from 'node:assert/strict'
 import { promises as fs } from 'node:fs'
 import { tmpdir } from 'node:os'
 import * as path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
+const scriptDir = path.dirname(fileURLToPath(import.meta.url))
+const tmp = await fs.mkdtemp(path.join(tmpdir(), 'hono-autoroutes-smoke-'))
 
-async function main() {
-  const tmp = await fs.mkdtemp(path.join(tmpdir(), 'hono-autoroutes-'))
-  const routesDir = path.join(tmp, 'src', 'routes', 'index')
-  await fs.mkdir(routesDir, { recursive: true })
-  const mwRootDir = path.join(tmp, 'src', 'routes')
-  const mwSubDir = path.join(tmp, 'src', 'routes', 'index')
+try {
+  const routesRoot = path.join(tmp, 'routes')
+  const groupedRouteDir = path.join(routesRoot, '(app)', 'index')
+  await fs.mkdir(groupedRouteDir, { recursive: true })
 
-  // Create a simple route file
-  const routeFile = path.join(routesDir, 'route.mjs')
+  const routeFile = path.join(groupedRouteDir, 'route.mjs')
+  const middlewareFile = path.join(routesRoot, 'middleware.mjs')
   await fs.writeFile(
     routeFile,
-    `export function register(app){ app.get('/', (c) => c.text('root-ok')) }
-`
+    `export function register(app) { app.get('/', (c) => c.text('smoke-ok')) }`,
   )
-
-  // middleware at root (applies to all)
-  const mwRootFile = path.join(mwRootDir, 'middleware.mjs')
   await fs.writeFile(
-    mwRootFile,
-    `export default [
-      async (c, next) => { c.header('x-root', 'ok'); await next() }
-    ]
-    `
+    middlewareFile,
+    `export default async (c, next) => { c.header('x-smoke', 'ok'); await next() }`,
   )
 
-  // middleware at subpath (applies to /index)
-  const mwSubFile = path.join(mwSubDir, 'middleware.mjs')
-  await fs.writeFile(
-    mwSubFile,
-    `export const middleware = async (c, next) => { c.header('x-index', 'ok'); await next() }
-    `
+  const libraryUrl = pathToFileURL(path.join(scriptDir, '..', 'dist', 'index.js')).href
+  const { createAppWithAutoRoutes, mountAutoRoutesFromEntries } = await import(libraryUrl)
+
+  const filesystemApp = await createAppWithAutoRoutes({ rootDir: routesRoot, logger: {} })
+  const filesystemResponse = await filesystemApp.request('http://localhost/index')
+  assert.equal(filesystemResponse.status, 200)
+  assert.equal(await filesystemResponse.text(), 'smoke-ok')
+  assert.equal(filesystemResponse.headers.get('x-smoke'), 'ok')
+
+  const { Hono } = await import('hono')
+  const entriesApp = new Hono()
+  await mountAutoRoutesFromEntries(
+    entriesApp,
+    {
+      '/virtual/routes/(app)/index/route.mjs': () => import(pathToFileURL(routeFile).href),
+      '/virtual/routes/middleware.mjs': () => import(pathToFileURL(middlewareFile).href),
+    },
+    { virtualRoot: '/virtual/routes/', logger: {} },
   )
+  const entriesResponse = await entriesApp.request('http://localhost/index')
+  assert.equal(entriesResponse.status, 200)
+  assert.equal(await entriesResponse.text(), 'smoke-ok')
+  assert.equal(entriesResponse.headers.get('x-smoke'), 'ok')
 
-  const lib = await import(path.join(__dirname, '..', 'dist', 'index.js'))
-  // filesystem mode
-  const app = await lib.createAppWithAutoRoutes({ rootDir: path.join(tmp, 'src', 'routes') })
-  const res = await app.fetch(new Request('http://localhost/index'))
-  const txt = await res.text()
-  console.log('SMOKE_RESPONSE_FS=', txt, res.headers.get('x-root'), res.headers.get('x-index'))
-
-  // entries mode
-  const entriesApp = new (await import('hono')).Hono()
-  const entries = {
-    '/virtual/routes/index/route.mjs': () => import(routeFile),
-    '/virtual/routes/middleware.mjs': () => import(mwRootFile),
-    '/virtual/routes/index/middleware.mjs': () => import(mwSubFile),
-    // duplicate same mount path, later should be skipped by default ('first')
-    '/virtual/routes/index/route.ts': async () => ({
-      register(app){ app.get('/', (c) => c.text('should-not-see')) }
-    }),
-  }
-  await lib.mountAutoRoutes(entriesApp, { entries, virtualRoot: '/virtual/routes/' })
-  const res2 = await entriesApp.fetch(new Request('http://localhost/index'))
-  const txt2 = await res2.text()
-  console.log('SMOKE_RESPONSE_ENTRIES=', txt2, res2.headers.get('x-root'), res2.headers.get('x-index'))
-
-  // entries mode with duplicateStrategy: 'last'
-  const entriesAppLast = new (await import('hono')).Hono()
-  const entriesLast = {
-    '/virtual/routes/index/route.mjs': () => import(routeFile),
-    '/virtual/routes/index/route.ts': async () => ({
-      register(app){ app.get('/', (c) => c.text('last-wins')) }
-    }),
-  }
-  await lib.mountAutoRoutes(entriesAppLast, { entries: entriesLast, virtualRoot: '/virtual/routes/', duplicateStrategy: 'last' })
-  const res3 = await entriesAppLast.fetch(new Request('http://localhost/index'))
-  const txt3 = await res3.text()
-  console.log('SMOKE_RESPONSE_ENTRIES_LAST=', txt3)
+  console.log('Smoke test passed for filesystem and entries modes.')
+} finally {
+  await fs.rm(tmp, { recursive: true, force: true })
 }
-
-main().catch((err) => {
-  console.error(err)
-  process.exit(1)
-})
